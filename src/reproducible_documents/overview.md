@@ -10,6 +10,8 @@ The beauty of Markdown is that it can be very easily converted into many other f
 
 For each of my research projects, I write documentation in Markdown format and then create outputs as a PDF using Pandoc and as a website with Mkdocs.
 
+Personally, I like to work off the Markdown interface in Rstudio 1.4 - you can easily output your docs in pdf which I do frequently.
+
 
 ### Pandoc
 
