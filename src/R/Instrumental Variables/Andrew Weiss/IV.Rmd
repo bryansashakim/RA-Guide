@@ -1,0 +1,295 @@
+---
+title: "IV"
+author: "Bryan Kim"
+date: "10/29/2020"
+output: 
+  pdf_document:
+  toc: yes
+---
+```{r}
+library(tidyverse)  # ggplot(), %>%, mutate(), and friends
+library(broom)  # Convert models to data frames
+library(modelsummary)  # Create side-by-side regression tables
+library(kableExtra)  # Add fancier formatting to tables
+library(estimatr)  # Run 2SLS models in one step with iv_robust()
+library(AER)  # For ivreg()
+library(ivpack)  # For IV diagnostics like Anderson-Rubin causal effects
+
+
+ed_fake = read.csv("/Users/bryankim/Documents/R/Instrumental Variables/Andrew Weiss/father_education.csv")
+
+# QUESTION: Does an extra year of education cause increased wages??
+# PROBLEM:
+    # Naive model
+    # If we could actually measure ability, we could estimate this model, which closes the confounding backdoor posed by ability and isolates       just the effect of education on wages: model_forbidden <- lm(wage ~ educ + ability, data = ed_fake)
+    # However, in real life we don’t have ability, so we’re stuck with a naive model: model_naive <- lm(wage ~ educ, data = ed_fake)
+    # The naive model overestimates the effect of education on wages (12.2 vs. 9.24) because of omitted variable bias. Education suffers from       endogeneity—there are things in the model (like ability, hidden in the error term) that are correlated with it. Any estimate we               calculate will be wrong and biased because of selection effects or omitted variable bias (all different names for endogeneity).
+
+## ** An exogenous variable does not need to be instrumented, an endogenous one does
+
+# Check instrument validity
+# To fix the endogeneity problem, we can use an instrument to remove the endogeneity from education and instead use a special exogeneity-only version of education. Perhaps someone’s father’s education can be an instrument for education (it’s not the greatest instrument, but we’ll go with it).
+# 
+# For an instrument to be valid, it must meet three criteria:
+# 
+# Relevance: Instrument is correlated with policy variable
+# Exclusion: Instrument is correlated with outcome only through the policy variable
+# Exogeneity: Instrument isn’t correlated with anything else in the model (i.e. omitted variables)
+
+########################
+## GENERAL IV PROCESS ##
+########################
+
+# 1. Is the instrument (in our case father's education) relevant? (e.g. is father's education correlated with you're education)
+#   -> Instrument correlated with policy/program (i.e. is there a significant relationship between the two); And want F-stat in 1st stage > 104       (big F-stat means model explain a lot of variation in the outcome)
+# 2. Does instrument meet exclusion assumption? 
+#   -> Instrument causes outcome only through policy/program - lol good luck with that
+# 3. Is the instrument exogenous?
+#   -> No other variable is correlated with father's education from unmeasured things;error in uncorrelated with the instrument, and only the outcome or independent variable.
+# 4. 2-stage least squares (2SLS) 
+#   -> program ~ instrument; outcome ~ program_hat OR IV_robust()
+```
+
+```{r}
+
+# 1. (First Stage: Predicting your education based on father's education)
+first_stage = lm(educ ~ fathereduc, 
+                 data = ed_fake)
+first_stage; tidy(first_stage); glance(first_stage) # "statistic is the F-stat"
+
+# first_stage shows us the instrument is relevant (because it's significant at the very least and also intuitively make sense). Yay.
+
+# lil' graph:
+ed_fake %>% ggplot(aes(x = fathereduc, y = educ)) + geom_point() + geom_smooth(method = lm)
+
+```
+```{r}
+
+# 2. EXCLUSION (want fathereduc to be correlated with wages, but ONLY because of education)
+
+ed_fake %>% ggplot(aes(x = fathereduc, y = wage)) + 
+  geom_point() + 
+  geom_smooth(method = "lm")
+
+```
+```{r}
+
+# 3. CHECK FOR EXOGENEITY of our instrument (Meaning corr(IV, error) = 0 )
+## ** An exogenous variable does not need to be instrumented, an endogenous one does
+
+#SORGHOISRGIOS
+
+```
+```{r}
+########################
+# 2 STAGE LEAST SQUARES (2SLS)
+########################
+
+# 1st STAGE (already ran if you recall)
+first_stage = lm(educ ~ fathereduc, 
+                 data = ed_fake)
+tidy(first_stage)
+
+### GENERATE PREDICTIONS
+ed_fake_predicted = augment_columns(first_stage,ed_fake)
+    # The .fitted column tells us the predicted education based on pluggin in fathereduc in our model. It is the exogenous part of education;       we've removed the endogeneity by using the instrument fathereduc.
+ed_fake_predicted = ed_fake_predicted  %>% rename(educ_hat = .fitted)
+
+### USE PREDICTIONS
+second_stage = lm(wage ~ educ_hat,
+                  data = ed_fake_predicted)
+tidy(second_stage)
+
+# **** If we consider the coefficient on educ_hat to be the LOCAL AVERAGE TREATMENT EFFECT (LATE), then we assume that the ONLY mechanism           through   which father's education affects wages is the impact of your own education
+
+
+```
+
+
+```{r}
+
+### COMPARE WITH NAIVE MODEL
+
+naive_model = lm(wage ~ educ, 
+                 data = ed_fake)
+tidy(naive_model)
+# this is wrong because correlation is not causaition; there is unmeasured confounding (ability), which we removed with 2SLS. 
+
+forbidden_model = lm(wage ~ ability + educ,
+                     data = ed_fake)
+tidy(forbidden_model)
+
+#together
+modelsummary(list(naive_model,forbidden_model, second_stage))
+```
+
+
+## AUTOMATIC 2SLS
+
+
+```{r}
+# We can do a one-stage 2SLSL regression suing IV robust.(uses estimatr)
+
+model_2SLS = iv_robust(wage ~ educ | fathereduc, 
+                       data = ed_fake)
+tidy(model_2SLS)
+## NOTE THE ESTIMATE IS THE SAME AS ABOVE!!!! COOL SHIT
+# However, here you assume relevancy so you'd still need to do the FIRST-STAGE REGRESSION; and check F-statistic.
+
+
+```
+
+
+
+
+## EFFECT OF EDUCATION ON WAGE REAL DATA!!!
+
+```{r}
+ed_real = read_csv("/Users/bryankim/Documents/R/Instrumental Variables/Andrew Weiss/wage2.csv") %>% rename(fathereduc = feduc, mothereduc = meduc)  %>% na.omit() ## OMIT ANY Rows that has missing values.
+
+
+```
+
+### CHECK INSTRUMENTS
+
+## RELEVANCY
+# IS meduc and feduc related to your educ?
+```{r}
+model_check_instrument = lm(educ ~ fathereduc + mothereduc, 
+                            data = ed_real)
+tidy(model_check_instrument);glance(model_check_instrument)
+
+# some lil' plots
+ed_real %>% ggplot(aes(x = mothereduc, y = educ)) + 
+              geom_point(alpha = 0.1) +
+              theme_bw() +
+              geom_smooth(method = "lm")
+```
+
+
+
+## EXCLUSION
+```{r}
+## DOES mothereduc and fathereduc impact earnings ONLY THROUGH YOUR EDUC?? (prob not true because meduc could influence your extracurriculars which could impact earnings)
+```
+
+## EXOGENEITY
+```{r}
+# CHECK SHIT
+```
+
+
+## MODEL ESTIMATION
+```{r}
+# In two steps
+first_stage <- lm(educ ~ mothereduc + fathereduc, data = ed_real)
+ed_real_with_predicted <- augment_columns(first_stage, ed_real) %>% 
+  rename(educ_hat = .fitted)
+second_stage <- lm(wage ~ educ_hat, 
+                   data = ed_real_with_predicted)
+tidy(second_stage)
+
+# In one step
+model_actual = iv_robust(wage ~ educ | mothereduc + fathereduc,
+                         data = ed_real,
+                         diagnostics = TRUE)
+tidy(model_actual)
+
+# Compare with naive model
+model_naive = lm(wage ~ educ,
+                         data = ed_real)
+
+modelsummary(list("OLS" = model_naive, "2SLS (by hand)" = second_stage, 
+                  "2SLS (automatic)" = model_actual),
+             gof_omit = 'IC|Log|Adj|p\\.value|statistic|se_type', 
+             stars = TRUE) %>%
+  # Add a background color to rows 3 and 5
+  row_spec(c(3, 5), background = "#F5ABEA")
+```
+
+### CHECKING FOR WEAK INSTRUMENTS SINCE THE F-STAT was relatievly lower
+```{r}
+# In one step
+model_actual = iv_robust(wage ~ educ | mothereduc + fathereduc,
+                         data = ed_real,
+                         diagnostics = TRUE)
+# use summary bc tidy() only outputs coefficients
+summary(model_actual) 
+# WE ARE INTERESTED IN THE WEAK INSTRUMENTS LINE -  This is a slightly fancier version of just looking at the first-stage F statistic. The null hypothesis for this test is that the instruments we have specified are weak, so we’d like to reject that null hypothesis. Here, the p-value is tiny, so we can safely reject the null and say the instruments likely aren’t weak. (In general, you want a statistically significant weak instruments test).
+
+## ANDERSON-RUBIN TEST
+# Another approach for checking for weak instruments is to calculate something called the Anderson-Rubin confidence set, which is essentially a 95% confidence interval for your coefficient that shows the stability of the coefficient based on how weak or strong the instrument is. This test was invented in like 1949 and it’s arguably more robust than checking F statistics, but for whatever reason, nobody really teaches it or uses it!. It’s not in any of the textbooks for this class, and it’s really kind of rare. Even if you google “anderson rubin test weak instruments”, you’ll only find a bunch of lecture notes from fancy econometrics classes (like p. 10 here, or p. 4 here, or p. 4 here).
+# 
+# Additionally, most of the automatic 2SLS R packages don’t provide an easy way to do this test! The only one I’ve found is in the AER package. Basically, create a 2SLS model with AER’s ivreg() and then feed that model to the anderson.rubin.ci() function from the ivpack function. This doesn’t work with models you make with iv_robust() or any of the other packages that do 2SLS—only with AER’s ivreg(). It’s a hassle.
+library(AER)  # For ivreg()
+library(ivpack)  # For IV diagnostics like Anderson-Rubin causal effects
+
+# You have to include x = TRUE so that this works with diagnostic functions
+ARmodel <- ivreg(wage ~ educ | mothereduc + fathereduc,
+               data = ed_real, x = TRUE)
+
+# AR 95% confidence interval
+anderson.rubin.ci(ARmodel)
+# Based on this confidence interval, given the strength (or weakness) of the instruments, the IV estimate could be as low as 75.9 and as high as 152, which is a fairly big range around the $112 effect we found. Neat.
+# There’s no magic threshold to look for in these confidence intervals—you’re mostly concerned with how much potential variability there is. If you’re fine with a causal effect that could be between 76 and 152, great. If you want that range to be narrower, find some better instruments.
+```
+
+### Education, wages, and distance to college (control variables) (real data)
+```{r}
+# Once again, Card wants to estimate the effect of education on wage. But to remove the endogeneity that comes from ability, he uses a different instrumental variable: proximity to college.
+# 
+# He also uses control variables to help explain additional variation in wages: smsa66 + exper + expersq + black + south66.
+# 
+# IMPORTANT NOTE: When you include controls, every control variable needs to go in both stages. The only things from the first stage that don’t carry over to the second stage are the instruments—notice how nearc4 is only in the first stage, since it’s the instrument, but it’s not in the second stage. The other controls are all in both stages.
+
+card = read_csv("/Users/bryankim/Documents/R/Instrumental Variables/Andrew Weiss/card.csv")
+
+
+```
+
+## RELEVANCY
+```{r}
+# There should be a strong relationship between the instrument (distance to college) and education:
+
+first_stage <- lm(educ ~ nearc4 + smsa66 + exper + expersq + black + south66,
+                  data = card)
+tidy(first_stage); glance(first_stage)
+# Based on this first stage model, nearc4 has a significant relationship to educ, and the model’s joint F statistic is 449, which is definitely bigger than both 10 and 104. Good. We’ll call it relevant.
+```
+
+## EXCLUSION
+```{r}
+For distance to college to work as an instrument and meet the exclusion restriction, we have to prove that distance to college causes wages only through getting more education. Think about other possible pathways between living close to a college and increased wages—there could be other paths that don’t go through education. Good luck.
+```
+
+
+## EXOGENEITY
+```{r}
+For distance to college to work as an exogenous instrument, we have to prove that none of the unobserved confounders between education and earnings are connected to distance. Also good luck.
+```
+
+## 2SLS ESTIMATION
+```{r}
+# Assuming distance to education is a valid instrument (sure), we can use it in a 2SLS model. Remember that control variables have to go in both stages, so specify them accordingly in the model formula:
+
+model_2sls <- iv_robust(lwage ~ educ + smsa66 + exper + expersq + black + south66 | 
+                          nearc4 + smsa66 + exper + expersq + black + south66,
+                        data = card, diagnostics = TRUE)
+tidy(model_2sls); summary(model_2sls)
+# Based on the coefficient for educ, a year of education causes a 15.7% increase in annual wages, on average.
+
+# Is that an improvement over a naive model where we don’t account for any of the endogeneity?
+model_naive <- lm(lwage ~ educ + smsa66 + exper + expersq + black + south66,
+                  data = card)
+tidy(model_naive)
+# Yep! Without removing endogeneity from education, an additional year of education is only associated with a 7.6% increase in annual wages, on average.
+
+
+### COMPARE RESULTS
+modelsummary(list("Naive OLS" = model_naive, "2SLS" = model_2sls),
+             gof_omit = 'IC|Log|Adj|p\\.value|statistic|se_type', 
+             stars = TRUE) %>%
+  # Add a background color to row 3
+  row_spec(3, background = "#F5ABEA")
+```
+
